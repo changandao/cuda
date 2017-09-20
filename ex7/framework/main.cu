@@ -9,6 +9,7 @@
 
 #include "helper.h"
 #include <iostream>
+#include "stdio.h"
 using namespace std;
 
 // uncomment to use the camera
@@ -16,52 +17,52 @@ using namespace std;
 
 
 //Exercise 7
-float* getKernel(float sigma, int radius, const char *kname)
-{
-    int len = (size_t)radius*2+1;
-    float *k = new float[len*len];
-    if(kname == "Gaus"){
-        float sum = 0;
-        float tmp = 0;
-        for(int j = 0; j < len; j++)
-        {
-            for(int i = 0; i < len; i++)
-            {
-                tmp = expf(-(powf((i-radius),2.f) + powf(j-radius, 2.f))/(2.f*powf(sigma,2.f)))/(2.f*3.1416f*powf(sigma,2.f));
-                sum = sum + tmp;
-                k[i + (size_t)j*len] = tmp;
-            }
+float* getKernel(float sigma, int radius) {
+    int len = (size_t) radius * 2 + 1;
+    float *k = new float[len * len];
+    float sum = 0;
+    float tmp = 0;
+    for (int j = 0; j < len; j++) {
+        for (int i = 0; i < len; i++) {
+            tmp = expf(-(powf((i - radius), 2.f) + powf(j - radius, 2.f)) / (2.f * powf(sigma, 2.f))) /
+                  (2.f * 3.1416f * powf(sigma, 2.f));
+            sum = sum + tmp;
+            k[i + (size_t) j * len] = tmp;
         }
-        float upscale = 1.f/sum;
-        for(int ind = 0;ind < len*len; ind++) k[ind] = k[ind] * upscale;
-    }else if(kname == "Gradx"){
-        k[0] = -3.f/32.f;
-        k[1] = 0.f;
-        k[2] = 3.f/32.f;
-        k[3] = -10.f/32.f;
-        k[4] = 0.f;
-        k[5] = 10.f/32.f;
-        k[6] = -3.f/32.f;
-        k[7] = 0.f;
-        k[8] = 3.f/32.f;
     }
-    else if(kname == "Grady"){
-        k[0] = -3.f/32.f;
-        k[3] = 0.f;
-        k[6] = 3.f/32.f;
-        k[1] = -10.f/32.f;
-        k[4] = 0.f;
-        k[7] = 10.f/32.f;
-        k[2] = -3.f/32.f;
-        k[5] = 0.f;
-        k[8] = 3.f/32.f;
-    }
+    float upscale = 1.f / sum;
+    for (int ind = 0; ind < len * len; ind++) k[ind] = k[ind] * upscale;
     return k;
+}
+
+void getkx(float *kx) {
+    kx[0] = -3.f / 32.f;
+    kx[1] = 0.f;
+    kx[2] = 3.f / 32.f;
+    kx[3] = -10.f / 32.f;
+    kx[4] = 0.f;
+    kx[5] = 10.f / 32.f;
+    kx[6] = -3.f / 32.f;
+    kx[7] = 0.f;
+    kx[8] = 3.f / 32.f;
+}
+
+void getky(float *ky) {
+
+    ky[0] = -3.f/32.f;
+    ky[3] = 0.f;
+    ky[6] = 3.f/32.f;
+    ky[1] = -10.f/32.f;
+    ky[4] = 0.f;
+    ky[7] = 10.f/32.f;
+    ky[2] = -3.f/32.f;
+    ky[5] = 0.f;
+    ky[8] = 3.f/32.f;
 }
 
 
 
-__global__ void Gconv2(float *imgO, const float *imgI, const float *kernel, int w, int h, int nc, int r)
+__global__ void Gconv2(float *imgO, float *imgI, float *kernel, int w, int h, int nc, int r)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -85,8 +86,32 @@ __global__ void Gconv2(float *imgO, const float *imgI, const float *kernel, int 
     }
 }
 
+__global__ void Gconv2g(float *imgO, float *imgI, float *kernel, int w, int h, int nc, int r)
+{
+    int x = threadIdx.x + blockDim.x * blockIdx.x;
+    int y = threadIdx.y + blockDim.y * blockIdx.y;
 
-__global__ void robGrad(float *gradientx, float *gradienty, const float *imgI, const float *kernelx, const float *kernely, int w, int h, int nc)
+    int kw = (size_t)2*r + 1;
+    float value = 0.f;
+    if(x<w && y<h) {
+        for (int c = 0; c < nc; c++) {
+            float sum = 0.f;
+            size_t ind = x + (size_t) y * w + (size_t) w * h * c;
+            for (int kj = -r; kj < r; kj++) {
+                for (int ki = -r; ki < r; ki++) {
+                    int kii = min(max(0, x+ki),w-1);
+                    int kjj = min(max(0, y+kj),h-1);
+                    value = imgI[kii + (size_t)(kjj*w) + (size_t)w*h*c];
+                    sum += value * kernel[(r + ki) + (r + kj) * kw];
+                }
+            }
+            imgO[ind] = sum;
+        }
+    }
+}
+
+
+__global__ void robGrad(float *gradientx, float *gradienty, float *imgI, float *kernelx, float *kernely, int w, int h, int nc)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -103,8 +128,8 @@ __global__ void robGrad(float *gradientx, float *gradienty, const float *imgI, c
                     int kii = min(max(0, x+ki), w-1);
                     int kjj = min(max(0, y+kj), h-1);
                     value = imgI[kii + (size_t)(kjj*w) + (size_t)w*h*c];
-                    sumx += value * kernelx[(r + ki) + (r + kj) * kw];
-                    sumy += value * kernely[(r + ki) + (r + kj) * kw];
+                    sumx += value * kernelx[(r - ki) + (r - kj) * kw];
+                    sumy += value * kernely[(r - ki) + (r - kj) * kw];
                 }
             }
             gradientx[ind] = sumx;
@@ -233,7 +258,6 @@ int main(int argc, char **argv)
     float *imgIn = new float[(size_t)w*h*nc];
 
     // allocate raw output array (the computation result will be stored in this array, then later converted to mOut for displaying)
-    float *imgOut = new float[(size_t)w*h*mOut.channels()];
 
 
 
@@ -270,85 +294,125 @@ int main(int argc, char **argv)
     float sigma = 2.1;
     int r = ceil(3.f * sigma);
     int len = w*h*nc;
+    int lenofK = 2 * r + 1;
 
     //##
 
-    float *k = getKernel(sigma, r, "Gaus");
-    float *dkx = getKernel(sigma, r, "Gradx");
-    float *dky = getKernel(sigma, r, "Grady");
+    float *k = getKernel(sigma, r);
+    cout<< "GPU is running!!!!";
+
+    float *dkx = new float[9];
+    getkx(dkx);
+    float *dky = new float[9];
+    getky(dky);
+
+    for(int kg = 0; kg<9;kg++) {
+        printf("%f \n", dkx[kg]);
+
+    }
+    for(int kg = 0; kg<9;kg++) {
+        printf("%f \n", dky[kg]);
+
+    }
 
     float *convimO = new float[(size_t)w*h*nc];
-    float *m11 = new float[(size_t)w*h*nc];
-    float *m12 = new float[(size_t)w*h*nc];
-    float *m22 = new float[(size_t)w*h*nc];
+//    float *m11 = new float[(size_t)w*h];
+//    float *m12 = new float[(size_t)w*h];
+//    float *m22 = new float[(size_t)w*h];
+    float *vx = new float[(size_t)w*h*nc];
+    float *vy = new float[(size_t)w*h*nc];
+    cv::Mat kern(3, 3, mIn.type());
+    convert_layered_to_mat(kern, dky);
+
 
     cv::Mat convImg(h,w,mIn.type());
-    cv::Mat Im11(h,w,mIn.type());
-    cv::Mat Im12(h,w,mIn.type());
-    cv::Mat Im22(h,w,mIn.type());
-
+//    cv::Mat Im11(h,w,CV_32FC1);
+//    cv::Mat Im12(h,w,CV_32FC1);
+//    cv::Mat Im22(h,w,CV_32FC1);
+    cv::Mat Ivx(h,w,mIn.type());
+    cv::Mat Ivy(h,w,mIn.type());
 
 
     cout<< "GPU is running!!!!";
-    float *d_k = NULL;
-    float *d_imgIn = NULL;
-    float *d_kx = NULL;
-    float *d_ky = NULL;
+    float *d_k;
+    float *d_imgIn;
+    float *d_kx;
+    float *d_ky;
 
-    float *d_m11 = NULL;
-    float *d_m12 = NULL;
-    float *d_m22 = NULL;
-    float *d_T11 = NULL;
-    float *d_T12 = NULL;
-    float *d_T22 = NULL;
+//    float *d_m11;
+//    float *d_m12;
+//    float *d_m22;
+//    float *d_T11 = NULL;
+//    float *d_T12 = NULL;
+//    float *d_T22 = NULL;
 
-    float *d_convimO = NULL;
-    float *d_gradientx = NULL;
-    float *d_gradienty = NULL;
+    float *d_convimO;
+    float *d_gradientx;
+    float *d_gradienty;
 
     size_t nbytes = (size_t)(len)*sizeof(float);
-    cudaMalloc(&d_k, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_kx, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_ky, nbytes); CUDA_CHECK;
+
+    cudaMalloc(&d_k, (size_t)lenofK*lenofK*sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_kx, (size_t)9*sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_ky, (size_t)9*sizeof(float)); CUDA_CHECK;
     cudaMalloc(&d_imgIn, nbytes); CUDA_CHECK;
 
     cudaMalloc(&d_convimO, nbytes); CUDA_CHECK;
     cudaMalloc(&d_gradientx, nbytes); CUDA_CHECK;
     cudaMalloc(&d_gradienty, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_m11, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_m12, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_m22, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_T11, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_T12, nbytes); CUDA_CHECK;
-    cudaMalloc(&d_T22, nbytes); CUDA_CHECK;
+//    cudaMalloc(&d_m11, (size_t)w*h * sizeof(float)); CUDA_CHECK;
+//    cudaMalloc(&d_m12, (size_t)w*h * sizeof(float)); CUDA_CHECK;
+//    cudaMalloc(&d_m22, (size_t)w*h * sizeof(float)); CUDA_CHECK;
+//    cudaMalloc(&d_T11, nbytes); CUDA_CHECK;
+//    cudaMalloc(&d_T12, nbytes); CUDA_CHECK;
+//    cudaMalloc(&d_T22, nbytes); CUDA_CHECK;
+
+    cudaMemset(d_convimO, 0, nbytes);CUDA_CHECK;
+    cudaMemset(d_gradientx, 0, nbytes);CUDA_CHECK;
+    cudaMemset(d_gradienty, 0, nbytes);CUDA_CHECK;
+//    cudaMemset(d_m11, 0, (size_t)w*h * sizeof(float));
+//    cudaMemset(d_m12, 0, (size_t)w*h * sizeof(float));
+//    cudaMemset(d_m22, 0, (size_t)w*h * sizeof(float));
+//    cudaMemset(d_T11, 0, (size_t)w*h * sizeof(float));
+//    cudaMemset(d_T12, 0, (size_t)w*h * sizeof(float));
+//    cudaMemset(d_T22, 0, (size_t)w*h * sizeof(float));
+    CUDA_CHECK;
 
 
-    cudaMemcpy(d_k, k, nbytes, cudaMemcpyHostToDevice);CUDA_CHECK;
-    cudaMemcpy(d_kx, dkx, nbytes, cudaMemcpyHostToDevice);CUDA_CHECK;
-    cudaMemcpy(d_ky, dky, nbytes, cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_k, k, (size_t)lenofK*lenofK*sizeof(float), cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_kx, dkx, (size_t)9*sizeof(float), cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_ky, dky, (size_t)9*sizeof(float), cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_imgIn, imgIn, nbytes, cudaMemcpyHostToDevice);CUDA_CHECK;
 
     dim3 block = dim3(32,32,1);
     dim3 grid = dim3((block.x + w-1)/block.x, (block.y + h-1)/block.y, 1);
 
     Gconv2<<<grid, block>>>(d_convimO, d_imgIn, d_k, w, h, nc, r);CUDA_CHECK;
+    cout << "Convolution with Gauss kernel"<< endl;
 
-    robGrad<<<grid, block>>>(d_gradientx, d_gradienty, d_convimO, d_kx, d_ky, w, h, nc);CUDA_CHECK;
+//    robGrad<<<grid, block>>>(d_gradientx, d_gradienty, d_convimO, d_kx, d_ky, w, h, nc);CUDA_CHECK;
+//    cout << "rototianally gradient"<< endl;
+//    dim3 block1 = dim3(64,32,1);
+//    dim3 grid1 = dim3((block.x + w-1)/block.x, (block.y + h-1)/block.y, 1);
 
-    getM<<<grid, block>>>(d_m11, d_m12, d_m12, d_gradientx, d_gradienty, w,h,nc);CUDA_CHECK;
+    Gconv2g<<<grid, block>>>(d_gradientx, d_convimO, d_kx, w, h, nc, 2);CUDA_CHECK;
+    Gconv2g<<<grid, block>>>(d_gradienty, d_convimO, d_ky, w, h, nc, 2);CUDA_CHECK;
 
-    Gconv2<<<grid, block>>>(d_T11, d_m11, d_k, w, h, nc, r);CUDA_CHECK;
-    Gconv2<<<grid, block>>>(d_T12, d_m12, d_k, w, h, nc, r);CUDA_CHECK;
-    Gconv2<<<grid, block>>>(d_T22, d_m22, d_k, w, h, nc, r);CUDA_CHECK;
+
+//    getM<<<grid, block>>>(d_m11, d_m12, d_m12, d_gradientx, d_gradienty, w,h,nc);CUDA_CHECK;
+
+//    Gconv2<<<grid, block>>>(d_m11, d_m11, d_k, w, h, nc, r);CUDA_CHECK;
+//    Gconv2<<<grid, block>>>(d_m12, d_m12, d_k, w, h, nc, r);CUDA_CHECK;
+//    Gconv2<<<grid, block>>>(d_m22, d_m22, d_k, w, h, nc, r);CUDA_CHECK;
 
 
     cudaMemcpy(convimO, d_convimO, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
-    cudaMemcpy(convimO, d_gradientx, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
-    cudaMemcpy(convimO, d_gradienty, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
+    cudaMemcpy(vx, d_gradientx, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
+    cudaMemcpy(vy, d_gradienty, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
 
-    cudaMemcpy(m11, d_m11, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
-    cudaMemcpy(m22, d_m11, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
-    cudaMemcpy(m22, d_m12, nbytes, cudaMemcpyDeviceToHost);CUDA_CHECK;
+//    cudaMemcpy(m11, d_m11, (size_t)w*h * sizeof(float), cudaMemcpyDeviceToHost);CUDA_CHECK;
+//    cudaMemcpy(m22, d_m11, (size_t)w*h * sizeof(float), cudaMemcpyDeviceToHost);CUDA_CHECK;
+//    cudaMemcpy(m22, d_m12, (size_t)w*h * sizeof(float), cudaMemcpyDeviceToHost);CUDA_CHECK;
 
 
     cudaFree(d_k);CUDA_CHECK;
@@ -356,16 +420,17 @@ int main(int argc, char **argv)
     cudaFree(d_ky);CUDA_CHECK;
 
     cudaFree(d_convimO);CUDA_CHECK;
-    cudaFree(d_imgIn);CUDA_CHECK;
-    cudaFree(d_m11);CUDA_CHECK;
-    cudaFree(d_m12);CUDA_CHECK;
-    cudaFree(d_m22);CUDA_CHECK;
-    cudaFree(d_T11);CUDA_CHECK;
-    cudaFree(d_T12);CUDA_CHECK;
-    cudaFree(d_T22);CUDA_CHECK;
+//    cudaFree(d_m11);CUDA_CHECK;
+//    cudaFree(d_m12);CUDA_CHECK;
+//    cudaFree(d_m22);CUDA_CHECK;
+//    cudaFree(d_T11);CUDA_CHECK;
+//    cudaFree(d_T12);CUDA_CHECK;
+//    cudaFree(d_T22);CUDA_CHECK;
 
     cudaFree(d_gradientx);CUDA_CHECK;
     cudaFree(d_gradienty);CUDA_CHECK;
+    cudaFree(d_imgIn);CUDA_CHECK;
+
 
 
 
@@ -373,26 +438,32 @@ int main(int argc, char **argv)
     showImage("Input", mIn, 100, 100);  // show at position (x_from_left=100,y_from_above=100)
 
     // show output image: first convert to interleaved opencv format from the layered raw array
-    convert_layered_to_mat(mOut, imgOut);
-    showImage("Output", mOut, 100+w+40, 100);
 
     // ### Display your own output images here as needed
 
     convert_layered_to_mat(convImg, convimO);
-    showImage("convolution CPU", convImg, 100, 100);
+    showImage("convolution GPU", convImg, 100, 100);
 
-    convert_layered_to_mat(Im11, m11);
-    convert_layered_to_mat(Im12, m12);
-    convert_layered_to_mat(Im22, m22);
+//    convert_layered_to_mat(Im11, m11);
+//    convert_layered_to_mat(Im12, m12);
+//    convert_layered_to_mat(Im22, m22);
+    convert_layered_to_mat(Ivx, vx);
+    convert_layered_to_mat(Ivy, vy);
 
-    int scaleup = 1.f;
+    int scaleup = 10.f;
 
-    Im11 *= scaleup;
-    Im12 *= scaleup;
-    Im22 *= scaleup;
-    showImage("m11", Im11, 100, 100);
-    showImage("m12", Im12, 100, 100);
-    showImage("m22", Im22, 100, 100);
+//    Im11 *= scaleup;
+//    Im12 *= scaleup;
+//    Im22 *= scaleup;
+//    showImage("m11", Im11, 100, 100);
+//    showImage("m12", Im12, 100, 100);
+//    showImage("m22", Im22, 100, 100);
+    Ivx *= scaleup;
+    Ivy *= scaleup;
+    showImage("Ivx", Ivx, 100, 100);
+    showImage("Ivy", Ivy, 100, 100);
+    showImage("dkx", kern, 100, 100);
+
 
 
 
@@ -408,12 +479,12 @@ int main(int argc, char **argv)
 
 
     // save input and result
-    cv::imwrite("image_input.png",mIn*255.f);  // "imwrite" assumes channel range [0,255]
-    cv::imwrite("image_result.png",mOut*255.f);
+//    cv::imwrite("image_input.png",mIn*255.f);  // "imwrite" assumes channel range [0,255]
+//    cv::imwrite("image_result.png",mOut*255.f);
 
     // free allocated arrays
     delete[] imgIn;
-    delete[] imgOut;
+//    delete[] imgOut;
     delete[] k;
     delete[] dkx;
     delete[] dky;
